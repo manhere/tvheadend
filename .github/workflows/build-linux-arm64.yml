@@ -1,0 +1,162 @@
+name: Build tvheadend Linux arm64
+
+on:
+  workflow_dispatch:
+    inputs:
+      extra_configure:
+        description: '额外 configure 选项（空格分隔，可留空，如 --enable-hdhomerun_client）'
+        required: false
+        default: ''
+        type: string
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux-arm64:
+    name: Build Linux arm64 (aarch64)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: 检出当前仓库源码
+        uses: actions/checkout@v4
+
+      - name: 安装交叉编译工具链
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential git pkg-config wget python3 \
+            gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu
+
+          aarch64-linux-gnu-gcc --version
+          node --version; npm --version
+
+      # tvheadend 硬依赖 OpenSSL 与 zlib。两者都交叉编译成静态库放在
+      # /tmp/arm64-libs，随后用 PKG_CONFIG_LIBDIR 完全替换 pkg-config 默认
+      # 搜索路径——host x86_64 的 .pc 一个都不可见，configure 的 check_pkg
+      # 只能命中 arm64 静态库，链接时 -lssl/-lcrypto/-lz 全部落到 .a 上，
+      # 产物对目标盒子的运行时依赖只剩 glibc 自身。
+      # （方案对齐 oscam-patched build-linux-arm64.yml 的 libusb 静态交叉
+      # 编译模式。）
+      - name: 交叉编译 ARM64 版 zlib（静态）
+        run: |
+          cd /tmp
+          wget -q https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+          tar -xf zlib-1.3.1.tar.gz
+          cd zlib-1.3.1
+          CC=aarch64-linux-gnu-gcc AR=aarch64-linux-gnu-ar \
+            RANLIB=aarch64-linux-gnu-ranlib \
+            ./configure --prefix=/tmp/arm64-libs --static
+          make -j$(nproc)
+          make install
+
+          # zlib 不生成 .pc，手写一个供 tvheadend configure 的 check_pkg zlib 使用
+          mkdir -p /tmp/arm64-libs/lib/pkgconfig
+          cat > /tmp/arm64-libs/lib/pkgconfig/zlib.pc << 'EOF'
+          prefix=/tmp/arm64-libs
+          libdir=${prefix}/lib
+          includedir=${prefix}/include
+
+          Name: zlib
+          Description: zlib compression library
+          Version: 1.3.1
+          Libs: -L${libdir} -lz
+          Cflags: -I${includedir}
+          EOF
+          ls -la /tmp/arm64-libs/lib/ /tmp/arm64-libs/lib/pkgconfig/
+
+      - name: 交叉编译 ARM64 版 OpenSSL（静态）
+        run: |
+          cd /tmp
+          wget -q https://github.com/openssl/openssl/releases/download/openssl-3.0.15/openssl-3.0.15.tar.gz
+          tar -xf openssl-3.0.15.tar.gz
+          cd openssl-3.0.15
+          ./Configure linux-aarch64 \
+            --cross-compile-prefix=aarch64-linux-gnu- \
+            no-shared no-tests \
+            --prefix=/tmp/arm64-libs \
+            --openssldir=/tmp/arm64-libs/ssl
+          make -j$(nproc) build_libs
+          make install_sw
+          ls -la /tmp/arm64-libs/lib/ | head
+          test -f /tmp/arm64-libs/lib/libssl.a
+          test -f /tmp/arm64-libs/lib/libcrypto.a
+          test -f /tmp/arm64-libs/lib/pkgconfig/openssl.pc
+          test -f /tmp/arm64-libs/lib/pkgconfig/libssl.pc
+
+      # 说明：
+      # - --nowerror=1：交叉环境警告不可控，关掉 -Werror
+      # - 转码外链库（libav/x264/x265/vpx/theora/vorbis/opus/fdkaac/vaapi）
+      #   全部禁用：DTMB 场景走 passthrough，识别与解扰不依赖它们，
+      #   也避免为每个转码库再做一轮 arm64 交叉编译
+      # - libav/ffmpeg_static 本身是 auto，PKG_CONFIG_LIBDIR 隔离后自然
+      #   检测不到，这里显式 disable 是防 runner 预装包漏网
+      # - vue_build:auto：runner 自带 node/npm，Vite 构建跑在 host 上，
+      #   产物是纯静态 JS/CSS，与目标架构无关
+      # - 产物为动态链接 glibc 的 arm64 ELF（tvheadend 无法全静态），
+      #   ubuntu-22.04 的 glibc 2.35 兼容绝大多数 arm64 盒子系统
+      - name: 配置 tvheadend（交叉编译）
+        env:
+          EXTRA_CONFIGURE: ${{ inputs.extra_configure }}
+        run: |
+          export PKG_CONFIG_LIBDIR=/tmp/arm64-libs/lib/pkgconfig
+          export PKG_CONFIG_PATH=/tmp/arm64-libs/lib/pkgconfig
+
+          # shellcheck disable=SC2086
+          ./configure \
+            --arch=aarch64 \
+            --cpu=cortex-a53 \
+            --cc=aarch64-linux-gnu-gcc \
+            --nowerror=1 \
+            --disable-ccache \
+            --disable-avahi \
+            --disable-dbus_1 \
+            --disable-pcre \
+            --disable-pcre2 \
+            --disable-uriparser \
+            --disable-libav \
+            --disable-ffmpeg_static \
+            --disable-libx264 --disable-libx264_static \
+            --disable-libx265 --disable-libx265_static \
+            --disable-libvpx --disable-libvpx_static \
+            --disable-libtheora --disable-libtheora_static \
+            --disable-libvorbis --disable-libvorbis_static \
+            --disable-libfdkaac --disable-libfdkaac_static \
+            --disable-libopus --disable-libopus_static \
+            --disable-vaapi \
+            --disable-nvenc \
+            --disable-hdhomerun_client \
+            --disable-hdhomerun_server \
+            --disable-hdhomerun_static \
+            --enable-zlib \
+            $EXTRA_CONFIGURE
+
+          echo "=== .config.mk 关键项 ==="
+          grep -E "^ARCH|^CC|LDFLAGS|CONFIG_ZLIB|CONFIG_SSL" .config.mk | head
+
+      - name: 交叉编译 tvheadend
+        run: |
+          make -j$(nproc)
+
+      - name: 验证交叉编译产物
+        run: |
+          ls -la build.linux/tvheadend
+          file build.linux/tvheadend
+          echo "=== 检查 ELF 架构 ==="
+          aarch64-linux-gnu-readelf -h build.linux/tvheadend | grep -E "Class|Machine|Flags"
+          echo "=== 动态依赖（应只剩 glibc 系，无 libssl/libz NEEDED） ==="
+          aarch64-linux-gnu-readelf -d build.linux/tvheadend | grep NEEDED
+          echo "=== 确认 OpenSSL/zlib 已静态链入（符号抽查） ==="
+          aarch64-linux-gnu-nm build.linux/tvheadend | grep -c "SSL_" || true
+
+      - name: 上传构建产物
+        # 构建产物始终上传（便于测试性构建也能下载二进制）。
+        uses: actions/upload-artifact@v4
+        with:
+          name: tvheadend-linux-arm64
+          path: build.linux/tvheadend
+          retention-days: 30
