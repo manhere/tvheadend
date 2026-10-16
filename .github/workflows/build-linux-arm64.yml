@@ -189,10 +189,117 @@ jobs:
           echo "=== 确认 OpenSSL/zlib 已静态链入（符号抽查） ==="
           aarch64-linux-gnu-nm build.linux/tvheadend | grep -c "SSL_" || true
 
+      # 按 debian/ 官方打包内容组装 arm64 deb：service/default/copyright
+      # 直接复用上游文件；postinst/prerm/postrm 为 debconf-free 简化版
+      # （官方版靠 debconf 交互写 superuser 管理员凭据，这里不预置凭据，
+      # 首次访问 Web UI 由 tvheadend 自带的 admin 创建向导完成）。
+      # dpkg-deb 只打元数据与文件树，host x86_64 可直接产出 arm64 包。
+      - name: 打包 deb（Debian 12 arm64）
+        run: |
+          VERSION="4.3-$(date +%Y%m%d)"
+          DEBROOT=/tmp/debroot
+          rm -rf "$DEBROOT"
+          install -d "$DEBROOT/DEBIAN" \
+                    "$DEBROOT/usr/bin" \
+                    "$DEBROOT/usr/share/doc/tvheadend" \
+                    "$DEBROOT/lib/systemd/system" \
+                    "$DEBROOT/etc/default"
+
+          # 二进制（0755）与文档
+          install -m 0755 build.linux/tvheadend "$DEBROOT/usr/bin/tvheadend"
+          cp debian/copyright "$DEBROOT/usr/share/doc/tvheadend/copyright"
+
+          # 官方原样文件
+          cp debian/tvheadend.service "$DEBROOT/lib/systemd/system/tvheadend.service"
+          cp debian/tvheadend.default "$DEBROOT/etc/default/tvheadend"
+
+          # ---- DEBIAN 元数据 ----
+          cat > "$DEBROOT/DEBIAN/control" << EOF
+          Package: tvheadend
+          Version: $VERSION
+          Section: video
+          Priority: optional
+          Architecture: arm64
+          Maintainer: Tvheadend Project <debian@tvheadend.org>
+          Depends: libc6 (>= 2.35), adduser, init-system-helpers
+          Recommends: xmltv-util
+          Homepage: https://tvheadend.org
+          Description: Tvheadend TV streaming server and DVR
+           Tvheadend is a TV streaming server and digital video recorder.
+           - supports DVB-S(2)/T(2)/C, ISDB-S/T/C, ATSC-T/C, DTMB, IPTV, SAT>IP, HDHomeRun
+           - this build adds China DTMB AVS+/AVS2/AVS3 video and DRA audio
+             stream identification (see manhere/tvheadend master)
+          EOF
+
+          cat > "$DEBROOT/DEBIAN/conffiles" << EOF
+          /etc/default/tvheadend
+          EOF
+
+          cat > "$DEBROOT/DEBIAN/postinst" << 'EOF'
+          #!/bin/sh
+          set -e
+
+          # 简化自 debian/tvheadend.postinst：创建系统用户与配置目录，
+          # 启用 systemd 服务；不写 superuser 凭据文件（首访 Web UI 时
+          # 由 tvheadend 的 admin 创建向导完成初始化）。
+          HTS_USER="hts"
+
+          case "$1" in
+            configure)
+              if ! getent passwd "$HTS_USER" >/dev/null; then
+                adduser --quiet --system --group --home /var/lib/tvheadend "$HTS_USER"
+              fi
+              HTS_HOMEDIR="$(getent passwd "$HTS_USER" | cut -d':' -f6)"
+              HTS_UID="$(getent passwd "$HTS_USER" | cut -d':' -f3)"
+              HTS_GID="$(getent passwd "$HTS_USER" | cut -d':' -f4)"
+              install -d -o "$HTS_UID" -g "$HTS_GID" /var/lib/tvheadend
+              install -d -o "$HTS_UID" -g "$HTS_GID" "$HTS_HOMEDIR/recordings"
+              if [ -x /bin/systemctl ] && [ -d /run/systemd/system ]; then
+                systemctl daemon-reload >/dev/null || true
+                systemctl enable tvheadend.service >/dev/null || true
+              fi
+              ;;
+          esac
+          exit 0
+          EOF
+
+          cat > "$DEBROOT/DEBIAN/prerm" << 'EOF'
+          #!/bin/sh
+          set -e
+          if [ "$1" = remove -o "$1" = upgrade ] && \
+             [ -x /bin/systemctl ] && [ -d /run/systemd/system ]; then
+            systemctl stop tvheadend.service >/dev/null 2>&1 || true
+          fi
+          exit 0
+          EOF
+
+          cat > "$DEBROOT/DEBIAN/postrm" << 'EOF'
+          #!/bin/sh
+          set -e
+          # 简化自 debian/tvheadend.postrm
+          if [ "$1" = purge ]; then
+            deluser --system hts || true
+            rm -rf /var/lib/tvheadend
+          fi
+          if [ -x /bin/systemctl ]; then
+            systemctl daemon-reload >/dev/null 2>&1 || true
+          fi
+          exit 0
+          EOF
+
+          chmod 0755 "$DEBROOT/DEBIAN"/postinst "$DEBROOT/DEBIAN"/prerm "$DEBROOT/DEBIAN"/postrm
+
+          dpkg-deb --root-owner-group --build "$DEBROOT" \
+            "build.linux/tvheadend_${VERSION}_arm64.deb"
+          dpkg-deb --info "build.linux/tvheadend_${VERSION}_arm64.deb"
+          dpkg-deb --contents "build.linux/tvheadend_${VERSION}_arm64.deb"
+
       - name: 上传构建产物
         # 构建产物始终上传（便于测试性构建也能下载二进制）。
         uses: actions/upload-artifact@v4
         with:
           name: tvheadend-linux-arm64
-          path: build.linux/tvheadend
+          path: |
+            build.linux/tvheadend
+            build.linux/tvheadend_*.deb
           retention-days: 30

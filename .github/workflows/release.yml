@@ -36,8 +36,10 @@ jobs:
         run: |
           mkdir -p release/
           cp artifacts/tvheadend-linux-arm64/tvheadend release/tvheadend-linux-arm64
+          cp artifacts/tvheadend-linux-arm64/tvheadend_*.deb release/
           cd release
           sha256sum tvheadend-linux-arm64 > tvheadend-linux-arm64.sha256
+          sha256sum tvheadend_*_arm64.deb > tvheadend_*_arm64.deb.sha256
           file tvheadend-linux-arm64 || true
           ls -la
 
@@ -47,6 +49,7 @@ jobs:
         id: version
         run: |
           echo "version=$(date +%Y%m%d)" >> $GITHUB_OUTPUT
+          echo "debname=$(basename release/tvheadend_*_arm64.deb)" >> $GITHUB_OUTPUT
 
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v3
@@ -59,13 +62,17 @@ jobs:
             **提交**: `${{ github.event.workflow_run.head_sha }}`
 
             ### 产物说明
-            | 文件 | 平台 | 架构 |
-            |------|------|------|
-            | `tvheadend-linux-arm64` | Linux arm64 | aarch64 (ARMv8) |
+            | 文件 | 说明 |
+            |------|------|
+            | `tvheadend-linux-arm64` | 裸二进制，aarch64 (ARMv8)，动态链接 glibc 2.35+，zlib/OpenSSL/libdvbcsa 已静态链入 |
+            | `${{ steps.version.outputs.debname }}` | Debian 12 (bookworm) arm64 安装包：含 systemd service（`/lib/systemd/system/tvheadend.service`）、`/etc/default/tvheadend` 配置、安装时自动创建 `hts` 系统用户与 `/var/lib/tvheadend`，安装后自动 enable 服务 |
 
-            动态链接 glibc 2.35+（ubuntu-22.04 交叉编译）；zlib/OpenSSL/libdvbcsa
-            已静态链入。二进制附带同名 `.sha256` 校验文件。同一天内的多次构建
-            共用 `build-YYYYMMDD` tag 并互相覆盖。
+            安装：`apt install ./tvheadend_*_arm64.deb`。首次访问 Web UI
+            （默认端口 9981）按向导创建管理员账号。每个文件附带同名
+            `.sha256` 校验文件。同一天内的多次构建共用 `build-YYYYMMDD`
+            tag 并互相覆盖。
           files: |
             release/tvheadend-linux-arm64
             release/tvheadend-linux-arm64.sha256
+            release/tvheadend_*_arm64.deb
+            release/tvheadend_*_arm64.deb.sha256
