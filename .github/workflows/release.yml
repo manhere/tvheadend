@@ -1,0 +1,71 @@
+name: Release tvheadend
+
+# 由构建工作流完成后触发；构建成功即发布 arm64 产物到 GitHub Release。
+# tag 只取运行当天日期（build-YYYYMMDD）：同一天内的多次构建（push /
+# 每日定时 / 手动）共用同一个 tag，后发布的把产物覆盖更新到当天已创建
+# 的 Release 上（提交 sha 仅记录在 Release 说明里）。
+on:
+  workflow_run:
+    workflows:
+      - Build tvheadend Linux arm64
+    types:
+      - completed
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release-linux-arm64:
+    name: 发布 Linux arm64
+    runs-on: ubuntu-24.04
+    if: >-
+      github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.name == 'Build tvheadend Linux arm64'
+
+    steps:
+      - name: 下载构建产物
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ github.event.workflow_run.id }}" \
+            --repo "${{ github.repository }}" \
+            -n tvheadend-linux-arm64 -D artifacts/tvheadend-linux-arm64
+
+      - name: 准备发布文件
+        run: |
+          mkdir -p release/
+          cp artifacts/tvheadend-linux-arm64/tvheadend release/tvheadend-linux-arm64
+          cd release
+          sha256sum tvheadend-linux-arm64 > tvheadend-linux-arm64.sha256
+          file tvheadend-linux-arm64 || true
+          ls -la
+
+      - name: 获取版本信息
+        # 版本 = 运行当天日期（UTC）。同一天内多次构建发布共用同一个
+        # tag，产物互相覆盖更新；提交 sha 仅记录在 Release 说明中。
+        id: version
+        run: |
+          echo "version=$(date +%Y%m%d)" >> $GITHUB_OUTPUT
+
+      - name: 创建 GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: build-${{ steps.version.outputs.version }}
+          name: tvheadend Build ${{ steps.version.outputs.version }}
+          body: |
+            ## tvheadend 自动构建（含中国 DTMB AVS+/AVS2/AVS3 与 DRA 识别）
+
+            **提交**: `${{ github.event.workflow_run.head_sha }}`
+
+            ### 产物说明
+            | 文件 | 平台 | 架构 |
+            |------|------|------|
+            | `tvheadend-linux-arm64` | Linux arm64 | aarch64 (ARMv8) |
+
+            动态链接 glibc 2.35+（ubuntu-22.04 交叉编译）；zlib/OpenSSL/libdvbcsa
+            已静态链入。二进制附带同名 `.sha256` 校验文件。同一天内的多次构建
+            共用 `build-YYYYMMDD` tag 并互相覆盖。
+          files: |
+            release/tvheadend-linux-arm64
+            release/tvheadend-linux-arm64.sha256

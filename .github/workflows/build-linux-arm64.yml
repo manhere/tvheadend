@@ -11,6 +11,10 @@ on:
   push:
     branches:
       - master
+  schedule:
+    # 每日 01:00 UTC（北京时间 09:00）定时构建，构建成功后由
+    # release.yml 发布到当天的 build-YYYYMMDD Release（同日覆盖）
+    - cron: '0 1 * * *'
 
 permissions:
   contents: read
