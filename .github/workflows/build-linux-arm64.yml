@@ -99,6 +99,12 @@ jobs:
           wget -q https://download.videolan.org/pub/videolan/libdvbcsa/1.1.0/libdvbcsa-1.1.0.tar.gz
           tar -xf libdvbcsa-1.1.0.tar.gz
           cd libdvbcsa-1.1.0
+          # 1.1.0 (2013) 的 config.sub/guess 太老，不认识 aarch64 三元组，
+          # 先换成 savannah 最新版（失败时回落 gcc-mirror）
+          curl -fsSL -o config.sub https://git.savannah.gnu.org/cgit/config.git/plain/config.sub \
+            || curl -fsSL -o config.sub https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.sub
+          curl -fsSL -o config.guess https://git.savannah.gnu.org/cgit/config.git/plain/config.guess \
+            || curl -fsSL -o config.guess https://raw.githubusercontent.com/gcc-mirror/gcc/master/config.guess
           ./configure \
             --host=aarch64-linux-gnu \
             --prefix=/tmp/arm64-libs \
