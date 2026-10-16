@@ -88,6 +88,26 @@ jobs:
           test -f /tmp/arm64-libs/lib/pkgconfig/openssl.pc
           test -f /tmp/arm64-libs/lib/pkgconfig/libssl.pc
 
+      # capmt/cwc/cccam/constcw 任一启用时 configure 强制要求 libdvbcsa
+      # （configure:812-822，check_cc_header + check_cc_lib 双重检测，无
+      # disable 出口——禁掉会导致解扰功能整体失效）。同样交叉编译为静态库。
+      # 注意：dvbcsa 检测不走 pkg-config，靠 CFLAGS/LDFLAGS 环境变量把
+      # /tmp/arm64-libs 的 include/lib 路径喂给 configure。
+      - name: 交叉编译 ARM64 版 libdvbcsa（静态）
+        run: |
+          cd /tmp
+          wget -q https://download.videolan.org/pub/videolan/libdvbcsa/1.1.0/libdvbcsa-1.1.0.tar.gz
+          tar -xf libdvbcsa-1.1.0.tar.gz
+          cd libdvbcsa-1.1.0
+          ./configure \
+            --host=aarch64-linux-gnu \
+            --prefix=/tmp/arm64-libs \
+            --disable-shared --enable-static
+          make -j$(nproc)
+          make install
+          test -f /tmp/arm64-libs/lib/libdvbcsa.a
+          test -f /tmp/arm64-libs/include/dvbcsa/dvbcsa.h
+
       # 说明：
       # - --nowerror=1：交叉环境警告不可控，关掉 -Werror
       # - 转码外链库（libav/x264/x265/vpx/theora/vorbis/opus/fdkaac/vaapi）
@@ -105,6 +125,12 @@ jobs:
         run: |
           export PKG_CONFIG_LIBDIR=/tmp/arm64-libs/lib/pkgconfig
           export PKG_CONFIG_PATH=/tmp/arm64-libs/lib/pkgconfig
+          # dvbcsa 检测不走 pkg-config（check_cc_header/check_cc_lib 直接
+          # 编译测试程序），需要 include/lib 路径；环境变量会原样写入
+          # .config.mk（CFLAGS += ${CFLAGS} / LDFLAGS += ${LDFLAGS}），
+          # 编译与链接阶段同样生效
+          export CFLAGS="-I/tmp/arm64-libs/include"
+          export LDFLAGS="-L/tmp/arm64-libs/lib"
 
           # shellcheck disable=SC2086
           ./configure \
