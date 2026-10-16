@@ -127,8 +127,13 @@ jobs:
       #   检测不到，这里显式 disable 是防 runner 预装包漏网
       # - vue_build:auto：runner 自带 node/npm，Vite 构建跑在 host 上，
       #   产物是纯静态 JS/CSS，与目标架构无关
-      # - 产物为动态链接 glibc 的 arm64 ELF（tvheadend 无法全静态），
-      #   全静态链接（-static），不依赖目标设备的 glibc 版本
+      # - --enable-bundle：上游默认 bundle:no（configure:69），数据资源
+      #   （Web UI classic+Vue dist、data/conf、dvb-scan 频率表）不嵌入
+      #   二进制，官方 deb 靠 make install 装到 /usr/share/tvheadend 供
+      #   运行时磁盘查找（filebundle.c 相对路径按 cwd→TVHEADEND_DATADIR
+      #   解析）。我们只发单文件 deb，必须启用嵌入，否则 Web UI 打不开、
+      #   预置 mux 表为空。需 runner python3 自带 gzip 模块（满足）。
+      # - 产物为全静态链接（-static），不依赖目标设备的 glibc 版本
       - name: 配置 tvheadend（交叉编译）
         env:
           EXTRA_CONFIGURE: ${{ inputs.extra_configure }}
@@ -156,6 +161,7 @@ jobs:
             --nowerror=1 \
             --disable-pie \
             --disable-ccache \
+            --enable-bundle \
             --disable-avahi \
             --disable-dbus_1 \
             --disable-pcre \
@@ -196,6 +202,9 @@ jobs:
           echo "=== 确认 OpenSSL/zlib/dvbcsa 已静态链入（符号抽查） ==="
           aarch64-linux-gnu-nm build.linux/tvheadend | grep -c "SSL_" || true
           aarch64-linux-gnu-nm build.linux/tvheadend | grep -c "dvbcsa_bs" || true
+          echo "=== 确认资源 bundle 已嵌入（Web UI/dvb-scan/data-conf） ==="
+          aarch64-linux-gnu-nm build.linux/tvheadend | grep -q "filebundle_root" && echo "filebundle_root: OK" || { echo "::error::bundle 未嵌入（filebundle_root 符号缺失）"; exit 1; }
+          aarch64-linux-gnu-nm build.linux/tvheadend | grep -c "dvbscan" || true
 
       # 按 debian/ 官方打包内容组装 arm64 deb：service/default/copyright
       # 直接复用上游文件；postinst/prerm/postrm 为 debconf-free 简化版
