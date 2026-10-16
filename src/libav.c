@@ -110,6 +110,21 @@ streaming_component_type2codec_id(streaming_component_type_t type)
   case SCT_THEORA:
     codec_id = AV_CODEC_ID_THEORA;
     break;
+  case SCT_CAVS:
+    codec_id = AV_CODEC_ID_CAVS;
+    break;
+  case SCT_AVS2:
+    codec_id = AV_CODEC_ID_AVS2;
+    break;
+  case SCT_AVS3:
+    codec_id = AV_CODEC_ID_AVS3;
+    break;
+  // Enable once supported by official FFmpeg. Custom AVSPlus builds
+  // define AV_CODEC_ID_DRA - uncomment both blocks when linking
+  // against such a build (enum values cannot be #ifdef'ed).
+  // case SCT_DRA:
+  //   codec_id = AV_CODEC_ID_DRA;
+  //   break;
   case SCT_AC3:
     codec_id = AV_CODEC_ID_AC3;
     break;
@@ -177,6 +192,18 @@ codec_id2streaming_component_type(enum AVCodecID id)
   case AV_CODEC_ID_THEORA:
     type = SCT_THEORA;
     break;
+  case AV_CODEC_ID_CAVS:
+    type = SCT_CAVS;
+    break;
+  case AV_CODEC_ID_AVS2:
+    type = SCT_AVS2;
+    break;
+  case AV_CODEC_ID_AVS3:
+    type = SCT_AVS3;
+    break;
+  // case AV_CODEC_ID_DRA:
+  //   type = SCT_DRA;
+  //   break;
   case AV_CODEC_ID_AC3:
     type = SCT_AC3;
     break;

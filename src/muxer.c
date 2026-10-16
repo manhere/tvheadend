@@ -52,6 +52,7 @@ static struct strtab container_audio_mime[] = {
   { "audio/mpeg",               MC_MPEG2AUDIO },
   { "audio/ac3",                MC_AC3 },
   { "audio/ac4",                MC_AC4 },
+  { "audio/dra",                MC_DRA },
   { "audio/aac",                MC_AAC },
   { "audio/aac",                MC_MP4A },
   { "audio/ogg",                MC_VORBIS },
@@ -97,6 +98,7 @@ static struct strtab container_name[] = {
   { "aac",        MC_AAC },
   { "mp4a",       MC_MP4A },
   { "oga",        MC_VORBIS },
+  { "dra",        MC_DRA },
   { "ac4",        MC_AC4 },
 };
 
@@ -120,6 +122,7 @@ static struct strtab container_audio_file_suffix[] = {
   { "aac",  MC_AAC },
   { "mp4a", MC_MP4A },
   { "oga",  MC_VORBIS },
+  { "dra",  MC_DRA },
   { "ac4",  MC_AC4 },
 };
 

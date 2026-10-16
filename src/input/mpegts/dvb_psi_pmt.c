@@ -392,6 +392,19 @@ dvb_psi_parse_pmt
       hts_stream_type = SCT_HEVC;
       break;
 
+    case 0x42:	/* AVS+ / CAVS video (China DTMB) */
+      hts_stream_type = SCT_CAVS;
+      break;
+
+    case 0xd2:	/* AVS2 video */
+      hts_stream_type = SCT_AVS2;
+      break;
+
+    case 0xd4:	/* AVS3 video (some DTMB muxes carry DRA audio with this
+                 * stream type - detected via 'DRA1' registration below) */
+      hts_stream_type = SCT_AVS3;
+      break;
+
     case 0x80:	/* DigiCipher II (North American cable) encrypted MPEG-2 */
       hts_stream_type = SCT_MPEG2VIDEO;
       break;
@@ -418,6 +431,12 @@ dvb_psi_parse_pmt
         break;
 
       switch(dtag) {
+      case DVB_DESC_STREAM_ID:
+        /* seen on Chinese DTMB muxes: DRA audio carried as private PES (0x06) */
+        if(estype == 0x06 && hts_stream_type == SCT_UNKNOWN)
+          hts_stream_type = SCT_DRA;
+        break;
+
       case DVB_DESC_CA:
         update |= psi_desc_ca(mt, set, ptr, dlen);
         break;
@@ -427,7 +446,12 @@ dvb_psi_parse_pmt
         break;
 
       case DVB_DESC_REGISTRATION:
-        if(mux->mm_pmt_ac3 != MM_AC3_PMT_N05 && dlen == 4 &&
+        if(dlen == 4 &&
+           ptr[0] == 'D' && ptr[1] == 'R' && ptr[2] == 'A' &&  ptr[3] == '1')
+          /* China DRA audio (GB/T 22726), registration id 'DRA1';
+           * overrides AVS3 when some muxes signal DRA audio as 0xd4 */
+          hts_stream_type = SCT_DRA;
+        else if(mux->mm_pmt_ac3 != MM_AC3_PMT_N05 && dlen == 4 &&
            ptr[0] == 'A' && ptr[1] == 'C' && ptr[2] == '-' &&  ptr[3] == '3')
           hts_stream_type = SCT_AC3;
         /* seen also these formats: */

@@ -42,7 +42,8 @@ typedef enum {
   MC_AAC         = 12,
   MC_MP4A        = 13,
   MC_VORBIS      = 14,
-  MC_AC4         = 15
+  MC_AC4         = 15,
+  MC_DRA         = 16
 } muxer_container_type_t;
 
 typedef enum {
