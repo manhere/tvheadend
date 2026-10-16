@@ -128,7 +128,7 @@ jobs:
       # - vue_build:auto：runner 自带 node/npm，Vite 构建跑在 host 上，
       #   产物是纯静态 JS/CSS，与目标架构无关
       # - 产物为动态链接 glibc 的 arm64 ELF（tvheadend 无法全静态），
-      #   ubuntu-22.04 的 glibc 2.35 兼容绝大多数 arm64 盒子系统
+      #   全静态链接（-static），不依赖目标设备的 glibc 版本
       - name: 配置 tvheadend（交叉编译）
         env:
           EXTRA_CONFIGURE: ${{ inputs.extra_configure }}
@@ -139,8 +139,14 @@ jobs:
           # 编译测试程序），需要 include/lib 路径；环境变量会原样写入
           # .config.mk（CFLAGS += ${CFLAGS} / LDFLAGS += ${LDFLAGS}），
           # 编译与链接阶段同样生效
+          # -static：对齐 oscam-patched 的全静态产物——zlib/OpenSSL/
+          # libdvbcsa 已是静态 .a，glibc 2.34+ 的 pthread/dl/rt 均已并入
+          # libc.a；静态二进制不再依赖目标设备 glibc 版本，任意发行版可用。
+          # NSS（getaddrinfo/getpwnam）走 glibc 内置 files/dns 回退，无需
+          # 目标机 NSS 模块；dlsym(RTLD_DEFAULT) 探测 dvbcsa_bs_key_set_ecm
+          # 失败时回退 dvbcsa_bs_key_set（tvhcsa.c:333-335），功能无损。
           export CFLAGS="-I/tmp/arm64-libs/include"
-          export LDFLAGS="-L/tmp/arm64-libs/lib"
+          export LDFLAGS="-L/tmp/arm64-libs/lib -static"
 
           # shellcheck disable=SC2086
           ./configure \
@@ -148,6 +154,7 @@ jobs:
             --cpu=cortex-a53 \
             --cc=aarch64-linux-gnu-gcc \
             --nowerror=1 \
+            --disable-pie \
             --disable-ccache \
             --disable-avahi \
             --disable-dbus_1 \
@@ -184,10 +191,11 @@ jobs:
           file build.linux/tvheadend
           echo "=== 检查 ELF 架构 ==="
           aarch64-linux-gnu-readelf -h build.linux/tvheadend | grep -E "Class|Machine|Flags"
-          echo "=== 动态依赖（应只剩 glibc 系，无 libssl/libz NEEDED） ==="
-          aarch64-linux-gnu-readelf -d build.linux/tvheadend | grep NEEDED
-          echo "=== 确认 OpenSSL/zlib 已静态链入（符号抽查） ==="
+          echo "=== 动态依赖（无 NEEDED = 全静态，可在任意 glibc 版本运行） ==="
+          aarch64-linux-gnu-readelf -d build.linux/tvheadend | grep NEEDED || echo "(no NEEDED entries — fully static)"
+          echo "=== 确认 OpenSSL/zlib/dvbcsa 已静态链入（符号抽查） ==="
           aarch64-linux-gnu-nm build.linux/tvheadend | grep -c "SSL_" || true
+          aarch64-linux-gnu-nm build.linux/tvheadend | grep -c "dvbcsa_bs" || true
 
       # 按 debian/ 官方打包内容组装 arm64 deb：service/default/copyright
       # 直接复用上游文件；postinst/prerm/postrm 为 debconf-free 简化版
@@ -221,7 +229,7 @@ jobs:
           Priority: optional
           Architecture: arm64
           Maintainer: Tvheadend Project <debian@tvheadend.org>
-          Depends: libc6 (>= 2.35), adduser, init-system-helpers
+          Depends: adduser, init-system-helpers
           Recommends: xmltv-util
           Homepage: https://tvheadend.org
           Description: Tvheadend TV streaming server and DVR
