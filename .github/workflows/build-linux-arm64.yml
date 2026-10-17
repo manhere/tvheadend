@@ -127,12 +127,15 @@ jobs:
       #   检测不到，这里显式 disable 是防 runner 预装包漏网
       # - vue_build:auto：runner 自带 node/npm，Vite 构建跑在 host 上，
       #   产物是纯静态 JS/CSS，与目标架构无关
-      # - --enable-bundle：上游默认 bundle:no（configure:69），数据资源
-      #   （Web UI classic+Vue dist、data/conf、dvb-scan 频率表）不嵌入
-      #   二进制，官方 deb 靠 make install 装到 /usr/share/tvheadend 供
-      #   运行时磁盘查找（filebundle.c 相对路径按 cwd→TVHEADEND_DATADIR
-      #   解析）。我们只发单文件 deb，必须启用嵌入，否则 Web UI 打不开、
-      #   预置 mux 表为空。需 runner python3 自带 gzip 模块（满足）。
+      # - bundle:no（上游默认）：资源不嵌入二进制，官方 deb 模式——
+      #   make install（support/posix.mk）把 src/webui/static、data/conf、
+      #   data/dvb-scan 装到 ${datadir}/tvheadend 供运行时磁盘查找
+      #   （filebundle.c 相对路径按 cwd→TVHEADEND_DATADIR 解析）。
+      #   注意 dvb-scan 不在源码仓库里，make 时由 check_dvb_scan
+      #   （Makefile:636）经 support/getmuxlist 从 dtv-scan-tables 拉取。
+      # - --prefix=/usr：support/configure.inc:32 默认 /usr/local，会把
+      #   TVHEADEND_DATADIR 编译成 /usr/local/share/tvheadend，与 deb 的
+      #   /usr/share/tvheadend 布局错位；官方 debian/rules 同为 /usr。
       # - 产物为全静态链接（-static），不依赖目标设备的 glibc 版本
       - name: 配置 tvheadend（交叉编译）
         env:
@@ -155,13 +158,13 @@ jobs:
 
           # shellcheck disable=SC2086
           ./configure \
+            --prefix=/usr \
             --arch=aarch64 \
             --cpu=cortex-a53 \
             --cc=aarch64-linux-gnu-gcc \
             --nowerror=1 \
             --disable-pie \
             --disable-ccache \
-            --enable-bundle \
             --disable-avahi \
             --disable-dbus_1 \
             --disable-pcre \
@@ -202,12 +205,16 @@ jobs:
           echo "=== 确认 OpenSSL/zlib/dvbcsa 已静态链入（符号抽查） ==="
           aarch64-linux-gnu-nm build.linux/tvheadend | grep -c "SSL_" || true
           aarch64-linux-gnu-nm build.linux/tvheadend | grep -c "dvbcsa_bs" || true
-          echo "=== 确认资源 bundle 已嵌入（Web UI/dvb-scan/data-conf） ==="
-          aarch64-linux-gnu-nm build.linux/tvheadend | grep -q "filebundle_root" && echo "filebundle_root: OK" || { echo "::error::bundle 未嵌入（filebundle_root 符号缺失）"; exit 1; }
-          aarch64-linux-gnu-nm build.linux/tvheadend | grep -c "dvbscan" || true
+          echo "=== 确认 dvb-scan 频率表已拉取（check_dvb_scan 自动执行） ==="
+          test -d data/dvb-scan/dvb-t || { echo "::error::data/dvb-scan 未拉取"; exit 1; }
+          echo "dvb-scan 频率表文件数: $(find data/dvb-scan -type f ! -name '.*' | wc -l)"
 
-      # 按 debian/ 官方打包内容组装 arm64 deb：service/default/copyright
-      # 直接复用上游文件；postinst/prerm/postrm 为 debconf-free 简化版
+      # 完全对齐官方 deb 打包方式（debian/rules → dh_auto_install）：
+      # make install（support/posix.mk）装二进制、tvhmeta/tv_meta_*.py、
+      # man 页，并把 BUNDLES（src/webui/static、data/conf、data/dvb-scan）
+      # 拷到 ${datadir}/tvheadend，顺带清理目标树里的 .git。
+      # 随后 strip（对齐官方 dh_strip），再补 service/default/copyright
+      # （来自上游 debian/）。postinst/prerm/postrm 为 debconf-free 简化版
       # （官方版靠 debconf 交互写 superuser 管理员凭据，这里不预置凭据，
       # 首次访问 Web UI 由 tvheadend 自带的 admin 创建向导完成）。
       # dpkg-deb 只打元数据与文件树，host x86_64 可直接产出 arm64 包。
@@ -216,19 +223,32 @@ jobs:
           VERSION="4.3-$(date +%Y%m%d)"
           DEBROOT=/tmp/debroot
           rm -rf "$DEBROOT"
-          install -d "$DEBROOT/DEBIAN" \
-                    "$DEBROOT/usr/bin" \
-                    "$DEBROOT/usr/share/doc/tvheadend" \
+          install -d "$DEBROOT/DEBIAN"
+
+          # 官方 install 布局（prefix=/usr → /usr/bin、/usr/share/tvheadend）
+          make install DESTDIR="$DEBROOT"
+
+          # 对齐官方 dh_strip：剥离调试信息（-g 编译产物含 debug_info）
+          aarch64-linux-gnu-strip --strip-unneeded "$DEBROOT/usr/bin/tvheadend"
+
+          # 官方原样附属文件
+          install -d "$DEBROOT/usr/share/doc/tvheadend" \
                     "$DEBROOT/lib/systemd/system" \
                     "$DEBROOT/etc/default"
-
-          # 二进制（0755）与文档
-          install -m 0755 build.linux/tvheadend "$DEBROOT/usr/bin/tvheadend"
           cp debian/copyright "$DEBROOT/usr/share/doc/tvheadend/copyright"
-
-          # 官方原样文件
           cp debian/tvheadend.service "$DEBROOT/lib/systemd/system/tvheadend.service"
           cp debian/tvheadend.default "$DEBROOT/etc/default/tvheadend"
+
+          # ---- 磁盘资源完整性校验（bundle:no，资源只存在于文件树） ----
+          echo "=== 校验 /usr/share/tvheadend 磁盘资源 ==="
+          test -d "$DEBROOT/usr/share/tvheadend/src/webui/static" || { echo "::error::webui static 未安装"; exit 1; }
+          test -d "$DEBROOT/usr/share/tvheadend/data/conf" || { echo "::error::data/conf 未安装"; exit 1; }
+          DVBSCAN_N=$(find "$DEBROOT/usr/share/tvheadend/data/dvb-scan" -type f | wc -l)
+          [ "$DVBSCAN_N" -gt 100 ] || { echo "::error::dvb-scan 文件异常（仅 $DVBSCAN_N 个）"; exit 1; }
+          echo "webui static 文件数: $(find "$DEBROOT/usr/share/tvheadend/src/webui/static" -type f | wc -l)"
+          echo "data/conf 文件数: $(find "$DEBROOT/usr/share/tvheadend/data/conf" -type f | wc -l)"
+          echo "data/dvb-scan 文件数: $DVBSCAN_N"
+          ! find "$DEBROOT" -name .git | grep -q . || { echo "::error::.git 目录泄漏进 deb"; exit 1; }
 
           # ---- DEBIAN 元数据 ----
           cat > "$DEBROOT/DEBIAN/control" << EOF
@@ -239,7 +259,7 @@ jobs:
           Architecture: arm64
           Maintainer: Tvheadend Project <debian@tvheadend.org>
           Depends: adduser, init-system-helpers
-          Recommends: xmltv-util
+          Recommends: xmltv-util, python3
           Homepage: https://tvheadend.org
           Description: Tvheadend TV streaming server and DVR
            Tvheadend is a TV streaming server and digital video recorder.
